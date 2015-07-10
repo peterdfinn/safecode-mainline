@@ -125,7 +125,14 @@ void InstrumentMemoryAccesses::instrument(Value *Pointer, Value *AccessSize,
                                           Function *Check, Instruction &I) {
   Builder->SetInsertPoint(&I);
   Value *VoidPointer = Builder->CreatePointerCast(Pointer, VoidPtrTy);
-  CallInst *CI = Builder->CreateCall(Check, VoidPointer, AccessSize); // NOTE TO SELF: put last 2 arguments into ArrayRef
+  
+  // Create ArrayRef to be passed to Builder->CreateCall.
+  Value* tempArray[2];
+  tempArray[0] = Pointer;
+  tempArray[1] = AccessSize;
+  ArrayRef<Value*> args(tempArray, 2);
+
+  CallInst *CI = Builder->CreateCall(Check, args);
 
   // Copy debug information if it is present.
   if (MDNode *MD = I.getMetadata("dbg"))
