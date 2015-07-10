@@ -78,8 +78,8 @@ namespace {
     virtual bool runOnFunction(Function &F);
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequired<DominatorTree>();
-      AU.addPreserved<DominatorTree>();
+      AU.addRequired<DominatorTreeWrapperPass>();
+      AU.addPreserved<DominatorTreeWrapperPass>();
       AU.addRequired<MSCInfo>();
       AU.addRequired<ScalarEvolution>();
       AU.setPreservesCFG();
@@ -102,7 +102,7 @@ FunctionPass *llvm::createOptimizeImpliedFastLSChecksPass() {
 }
 
 bool OptimizeImpliedFastLSChecks::runOnFunction(Function &F) {
-  DominatorTree *DT = &getAnalysis<DominatorTree>();
+  DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   MSCI = &getAnalysis<MSCInfo>();
   SE = &getAnalysis<ScalarEvolution>();
 
