@@ -246,7 +246,7 @@ InsertBaggyBoundsChecks::adjustGlobalValue (GlobalValue * V) {
   //
   Value *Zero = ConstantInt::getSigned(Int32Type, 0);
   Value *idx1[2] = {Zero, Zero};
-  Constant *init = ConstantExpr::getGetElementPtr(GV_new, idx1, 2);
+  Constant *init = ConstantExpr::getGetElementPtr(newType, GV_new, idx1, 2);
   GV->replaceAllUsesWith(init);
   GV->eraseFromParent();
 
@@ -318,14 +318,14 @@ InsertBaggyBoundsChecks::adjustAlloca (AllocaInst * AI) {
   Value *Zero = ConstantInt::getSigned(Int32Type, 0);
   Value *Two = ConstantInt::getSigned(Int32Type, 2);
   Value *idx[3] = {Zero, Two, Zero};
-  Value *V = GetElementPtrInst::Create(AI_new, idx, Twine(""), AI);
+  Value *V = GetElementPtrInst::Create(newType, AI_new, idx, Twine(""), AI);
   new StoreInst(ConstantInt::get(Int32Type, objectSize), V, AI);
 
   //
   // Create a GEP that accesses the first element of this new structure.
   //
   Value *idx1[2] = {Zero, Zero};
-  Instruction *init = GetElementPtrInst::Create(AI_new,
+  Instruction *init = GetElementPtrInst::Create(newType, AI_new,
                                                 idx1,
                                                 Twine(""),
                                                 AI);
@@ -391,7 +391,7 @@ InsertBaggyBoundsChecks::adjustArgv (Function * F) {
     for (; UI != Argv->use_end(); ++UI) {
       if (Instruction * Use = dyn_cast<Instruction>(*UI))
         if (CI != Use) {
-          Uses.push_back (*UI);
+          Uses.push_back (UI->getUser());
         }
     }
 
@@ -632,7 +632,7 @@ InsertBaggyBoundsChecks::cloneFunctionInto(Function *NewFunc,
         Idx[1] = ConstantInt::get(Type::getInt32Ty(NewFunc->getContext()), 0);
 
         GetElementPtrInst * gep_inst = 
-            GetElementPtrInst::Create(VMap[Io], Idx, 
+	  GetElementPtrInst::Create(Io->getType(), VMap[Io], Idx, 
                                  (VMap[Io])->getName() + ".cooked", header_blk);
 
         VMap[Io] = gep_inst;
@@ -871,7 +871,7 @@ InsertBaggyBoundsChecks::cloneFunction (Function * F) {
     Type* newType = *iter++;
     AllocaInst *AINew = new AllocaInst(newType, "", BB);
     LoadInst *LINew = new LoadInst(I, "", BB);
-    GetElementPtrInst *GEPNew = GetElementPtrInst::Create(AINew,
+    GetElementPtrInst *GEPNew = GetElementPtrInst::Create(newType, AINew,
                                                           Idx,
                                                           Twine(""),
                                                           BB);
@@ -971,7 +971,7 @@ InsertBaggyBoundsChecks::callClonedFunction (Function * F, Function * NewF) {
           Value *Idx[] = { zero, zero }; 
           AllocaInst *AINew = new AllocaInst(newType, 0, alignment, "", InsertPoint);
           LoadInst *LINew = new LoadInst(CI->getOperand(i), "", CI);
-          GetElementPtrInst *GEPNew = GetElementPtrInst::Create(AINew,
+          GetElementPtrInst *GEPNew = GetElementPtrInst::Create(newType, AINew,
                                                                 Idx,
                                                                 Twine(""),
                                                                 CI);
@@ -1027,7 +1027,7 @@ InsertBaggyBoundsChecks::callClonedFunction (Function * F, Function * NewF) {
 bool
 InsertBaggyBoundsChecks::runOnModule (Module & M) {
   // Get prerequisite analysis results
-  TD = &getAnalysis<DataLayout>();
+  TD = &M.getDataLayout();
   //
   // Align and pad global variables.
   //

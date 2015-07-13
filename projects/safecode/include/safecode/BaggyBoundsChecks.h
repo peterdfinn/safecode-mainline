@@ -40,13 +40,11 @@ struct InsertBaggyBoundsChecks : public ModulePass {
     const char *getPassName() const { return "Insert BaggyBounds Checks"; }
     virtual bool runOnModule(Module &M);
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      // Required passes
-      AU.addRequired<DataLayout>();
     };
 
   protected:
     // Pointers to required passes
-    DataLayout * TD;
+    const DataLayout * TD;
 
     // Protected methods
     void adjustGlobalValue (GlobalValue * GV);
