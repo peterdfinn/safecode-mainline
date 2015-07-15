@@ -39,11 +39,6 @@ def SDTX86VFCMP : SDTypeProfile<1, 3, [SDTCisInt<0>, SDTCisSameAs<1, 2>,
                                        SDTCisFP<1>, SDTCisVT<3, i8>,
                                        SDTCisVec<1>]>;
 
-def X86umin    : SDNode<"X86ISD::UMIN",      SDTIntBinOp>;
-def X86umax    : SDNode<"X86ISD::UMAX",      SDTIntBinOp>;
-def X86smin    : SDNode<"X86ISD::SMIN",      SDTIntBinOp>;
-def X86smax    : SDNode<"X86ISD::SMAX",      SDTIntBinOp>;
-
 def X86fmin    : SDNode<"X86ISD::FMIN",      SDTFPBinOp>;
 def X86fmax    : SDNode<"X86ISD::FMAX",      SDTFPBinOp>;
 
@@ -187,6 +182,7 @@ def X86addus   : SDNode<"X86ISD::ADDUS", SDTIntBinOp>;
 def X86subus   : SDNode<"X86ISD::SUBUS", SDTIntBinOp>;
 def X86adds    : SDNode<"X86ISD::ADDS", SDTIntBinOp>;
 def X86subs    : SDNode<"X86ISD::SUBS", SDTIntBinOp>;
+def X86mulhrs  : SDNode<"X86ISD::MULHRS" , SDTIntBinOp>;
 def X86avg     : SDNode<"X86ISD::AVG" , SDTIntBinOp>;
 def X86ptest   : SDNode<"X86ISD::PTEST", SDTX86CmpPTest>;
 def X86testp   : SDNode<"X86ISD::TESTP", SDTX86CmpPTest>;
@@ -207,6 +203,14 @@ def X86pmuludq : SDNode<"X86ISD::PMULUDQ",
 def X86pmuldq  : SDNode<"X86ISD::PMULDQ",
                          SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisVec<1>,
                                        SDTCisSameAs<1,2>]>>;
+
+def X86extrqi : SDNode<"X86ISD::EXTRQI",
+                  SDTypeProfile<1, 3, [SDTCisVT<0, v2i64>, SDTCisSameAs<0,1>,
+                                       SDTCisVT<2, i8>, SDTCisVT<3, i8>]>>;
+def X86insertqi : SDNode<"X86ISD::INSERTQI",
+                    SDTypeProfile<1, 4, [SDTCisVT<0, v2i64>, SDTCisSameAs<0,1>,
+                                         SDTCisSameAs<1,2>, SDTCisVT<3, i8>,
+                                         SDTCisVT<4, i8>]>>;
 
 // Specific shuffle nodes - At some point ISD::VECTOR_SHUFFLE will always get
 // translated into one of the target nodes below during lowering.
@@ -311,6 +315,7 @@ def X86fsubRnd   : SDNode<"X86ISD::FSUB_RND",  SDTFPBinOpRound>;
 def X86fmulRnd   : SDNode<"X86ISD::FMUL_RND",  SDTFPBinOpRound>;
 def X86fdivRnd   : SDNode<"X86ISD::FDIV_RND",  SDTFPBinOpRound>;
 def X86fmaxRnd   : SDNode<"X86ISD::FMAX_RND",      SDTFPBinOpRound>;
+def X86scalef    : SDNode<"X86ISD::SCALEF",    SDTFPBinOpRound>;
 def X86fminRnd   : SDNode<"X86ISD::FMIN_RND",      SDTFPBinOpRound>;
 def X86fsqrtRnd     : SDNode<"X86ISD::FSQRT_RND",  SDTFPUnaryOpRound>;
 def X86fgetexpRnd   : SDNode<"X86ISD::FGETEXP_RND",  SDTFPUnaryOpRound>;
@@ -560,6 +565,14 @@ def unalignednontemporalstore : PatFrag<(ops node:$val, node:$ptr),
   return false;
 }]>;
 
+def mgatherv4i32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+  (masked_gather node:$src1, node:$src2, node:$src3) , [{
+  if (MaskedGatherSDNode *Mgt = dyn_cast<MaskedGatherSDNode>(N))
+    return (Mgt->getIndex().getValueType() == MVT::v4i32 ||
+            Mgt->getBasePtr().getValueType() == MVT::v4i32);
+  return false;
+}]>;
+
 def mgatherv8i32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
   (masked_gather node:$src1, node:$src2, node:$src3) , [{
   if (MaskedGatherSDNode *Mgt = dyn_cast<MaskedGatherSDNode>(N))
@@ -568,6 +581,20 @@ def mgatherv8i32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
   return false;
 }]>;
 
+def mgatherv2i64 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+  (masked_gather node:$src1, node:$src2, node:$src3) , [{
+  if (MaskedGatherSDNode *Mgt = dyn_cast<MaskedGatherSDNode>(N))
+    return (Mgt->getIndex().getValueType() == MVT::v2i64 ||
+            Mgt->getBasePtr().getValueType() == MVT::v2i64);
+  return false;
+}]>;
+def mgatherv4i64 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+  (masked_gather node:$src1, node:$src2, node:$src3) , [{
+  if (MaskedGatherSDNode *Mgt = dyn_cast<MaskedGatherSDNode>(N))
+    return (Mgt->getIndex().getValueType() == MVT::v4i64 ||
+            Mgt->getBasePtr().getValueType() == MVT::v4i64);
+  return false;
+}]>;
 def mgatherv8i64 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
   (masked_gather node:$src1, node:$src2, node:$src3) , [{
   if (MaskedGatherSDNode *Mgt = dyn_cast<MaskedGatherSDNode>(N))
@@ -580,6 +607,30 @@ def mgatherv16i32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
   if (MaskedGatherSDNode *Mgt = dyn_cast<MaskedGatherSDNode>(N))
     return (Mgt->getIndex().getValueType() == MVT::v16i32 ||
             Mgt->getBasePtr().getValueType() == MVT::v16i32);
+  return false;
+}]>;
+
+def mscatterv2i64 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+  (masked_scatter node:$src1, node:$src2, node:$src3) , [{
+  if (MaskedScatterSDNode *Sc = dyn_cast<MaskedScatterSDNode>(N))
+    return (Sc->getIndex().getValueType() == MVT::v2i64 ||
+            Sc->getBasePtr().getValueType() == MVT::v2i64);
+  return false;
+}]>;
+
+def mscatterv4i32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+  (masked_scatter node:$src1, node:$src2, node:$src3) , [{
+  if (MaskedScatterSDNode *Sc = dyn_cast<MaskedScatterSDNode>(N))
+    return (Sc->getIndex().getValueType() == MVT::v4i32 ||
+            Sc->getBasePtr().getValueType() == MVT::v4i32);
+  return false;
+}]>;
+
+def mscatterv4i64 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+  (masked_scatter node:$src1, node:$src2, node:$src3) , [{
+  if (MaskedScatterSDNode *Sc = dyn_cast<MaskedScatterSDNode>(N))
+    return (Sc->getIndex().getValueType() == MVT::v4i64 ||
+            Sc->getBasePtr().getValueType() == MVT::v4i64);
   return false;
 }]>;
 

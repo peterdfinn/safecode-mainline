@@ -989,6 +989,12 @@ def : Pat<(int_ppc_vsx_xvdivsp v4f32:$A, v4f32:$B),
 def : Pat<(int_ppc_vsx_xvdivdp v2f64:$A, v2f64:$B),
           (XVDIVDP $A, $B)>;
 
+// Recip. square root estimate
+def : Pat<(int_ppc_vsx_xvrsqrtesp v4f32:$A),
+          (XVRSQRTESP $A)>;
+def : Pat<(int_ppc_vsx_xvrsqrtedp v2f64:$A),
+          (XVRSQRTEDP $A)>;
+
 } // AddedComplexity
 } // HasVSX
 
@@ -1012,6 +1018,9 @@ let AddedComplexity = 400 in { // Prefer VSX patterns over non-VSX patterns.
                           [(set v4i32:$XT, (vnot_ppc (and v4i32:$XA,
                                                     v4i32:$XB)))]>;
   } // isCommutable
+
+  def : Pat<(int_ppc_vsx_xxleqv v4i32:$A, v4i32:$B),
+            (XXLEQV $A, $B)>;
 
   def XXLORC : XX3Form<60, 170,
                        (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),

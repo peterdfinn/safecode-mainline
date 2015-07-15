@@ -148,8 +148,9 @@ TargetPassConfig *NVPTXTargetMachine::createPassConfig(PassManagerBase &PM) {
 }
 
 TargetIRAnalysis NVPTXTargetMachine::getTargetIRAnalysis() {
-  return TargetIRAnalysis(
-      [this](Function &) { return TargetTransformInfo(NVPTXTTIImpl(this)); });
+  return TargetIRAnalysis([this](Function &F) {
+    return TargetTransformInfo(NVPTXTTIImpl(this, F));
+  });
 }
 
 void NVPTXPassConfig::addIRPasses() {
@@ -205,13 +206,15 @@ bool NVPTXPassConfig::addInstSelector() {
   if (!ST.hasImageHandles())
     addPass(createNVPTXReplaceImageHandlesPass());
 
-  addPass(createNVPTXPeephole());
-
   return false;
 }
 
 void NVPTXPassConfig::addPostRegAlloc() {
   addPass(createNVPTXPrologEpilogPass(), false);
+  // NVPTXPrologEpilogPass calculates frame object offset and replace frame
+  // index with VRFrame register. NVPTXPeephole need to be run after that and
+  // will replace VRFrame with VRFrameLocal when possible.
+  addPass(createNVPTXPeephole());
 }
 
 FunctionPass *NVPTXPassConfig::createTargetRegisterAllocator(bool) {

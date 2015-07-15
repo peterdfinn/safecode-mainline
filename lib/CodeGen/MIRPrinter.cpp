@@ -15,10 +15,12 @@
 #include "MIRPrinter.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/YAMLTraits.h"
@@ -33,25 +35,39 @@ namespace {
 /// format.
 class MIRPrinter {
   raw_ostream &OS;
+  DenseMap<const uint32_t *, unsigned> RegisterMaskIds;
 
 public:
   MIRPrinter(raw_ostream &OS) : OS(OS) {}
 
   void print(const MachineFunction &MF);
 
-  void convert(yaml::MachineFunction &MF, const MachineRegisterInfo &RegInfo);
-  void convert(yaml::MachineBasicBlock &YamlMBB, const MachineBasicBlock &MBB);
+  void convert(yaml::MachineFunction &MF, const MachineRegisterInfo &RegInfo,
+               const TargetRegisterInfo *TRI);
+  void convert(yaml::MachineFrameInfo &YamlMFI, const MachineFrameInfo &MFI);
+  void convert(ModuleSlotTracker &MST, yaml::MachineBasicBlock &YamlMBB,
+               const MachineBasicBlock &MBB);
+  void convertStackObjects(yaml::MachineFunction &MF,
+                           const MachineFrameInfo &MFI);
+
+private:
+  void initRegisterMaskIds(const MachineFunction &MF);
 };
 
 /// This class prints out the machine instructions using the MIR serialization
 /// format.
 class MIPrinter {
   raw_ostream &OS;
+  ModuleSlotTracker &MST;
+  const DenseMap<const uint32_t *, unsigned> &RegisterMaskIds;
 
 public:
-  MIPrinter(raw_ostream &OS) : OS(OS) {}
+  MIPrinter(raw_ostream &OS, ModuleSlotTracker &MST,
+            const DenseMap<const uint32_t *, unsigned> &RegisterMaskIds)
+      : OS(OS), MST(MST), RegisterMaskIds(RegisterMaskIds) {}
 
   void print(const MachineInstr &MI);
+  void printMBBReference(const MachineBasicBlock &MBB);
   void print(const MachineOperand &Op, const TargetRegisterInfo *TRI);
 };
 
@@ -75,14 +91,19 @@ template <> struct BlockScalarTraits<Module> {
 } // end namespace llvm
 
 void MIRPrinter::print(const MachineFunction &MF) {
+  initRegisterMaskIds(MF);
+
   yaml::MachineFunction YamlMF;
   YamlMF.Name = MF.getName();
   YamlMF.Alignment = MF.getAlignment();
   YamlMF.ExposesReturnsTwice = MF.exposesReturnsTwice();
   YamlMF.HasInlineAsm = MF.hasInlineAsm();
-  convert(YamlMF, MF.getRegInfo());
+  convert(YamlMF, MF.getRegInfo(), MF.getSubtarget().getRegisterInfo());
+  convert(YamlMF.FrameInfo, *MF.getFrameInfo());
+  convertStackObjects(YamlMF, *MF.getFrameInfo());
 
   int I = 0;
+  ModuleSlotTracker MST(MF.getFunction()->getParent());
   for (const auto &MBB : MF) {
     // TODO: Allow printing of non sequentially numbered MBBs.
     // This is currently needed as the basic block references get their index
@@ -92,7 +113,7 @@ void MIRPrinter::print(const MachineFunction &MF) {
            "Can't print MBBs that aren't sequentially numbered");
     (void)I;
     yaml::MachineBasicBlock YamlMBB;
-    convert(YamlMBB, MBB);
+    convert(MST, YamlMBB, MBB);
     YamlMF.BasicBlocks.push_back(YamlMBB);
   }
   yaml::Output Out(OS);
@@ -100,34 +121,98 @@ void MIRPrinter::print(const MachineFunction &MF) {
 }
 
 void MIRPrinter::convert(yaml::MachineFunction &MF,
-                         const MachineRegisterInfo &RegInfo) {
+                         const MachineRegisterInfo &RegInfo,
+                         const TargetRegisterInfo *TRI) {
   MF.IsSSA = RegInfo.isSSA();
   MF.TracksRegLiveness = RegInfo.tracksLiveness();
   MF.TracksSubRegLiveness = RegInfo.subRegLivenessEnabled();
+
+  // Print the virtual register definitions.
+  for (unsigned I = 0, E = RegInfo.getNumVirtRegs(); I < E; ++I) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(I);
+    yaml::VirtualRegisterDefinition VReg;
+    VReg.ID = I;
+    VReg.Class =
+        StringRef(TRI->getRegClassName(RegInfo.getRegClass(Reg))).lower();
+    MF.VirtualRegisters.push_back(VReg);
+  }
 }
 
-void MIRPrinter::convert(yaml::MachineBasicBlock &YamlMBB,
+void MIRPrinter::convert(yaml::MachineFrameInfo &YamlMFI,
+                         const MachineFrameInfo &MFI) {
+  YamlMFI.IsFrameAddressTaken = MFI.isFrameAddressTaken();
+  YamlMFI.IsReturnAddressTaken = MFI.isReturnAddressTaken();
+  YamlMFI.HasStackMap = MFI.hasStackMap();
+  YamlMFI.HasPatchPoint = MFI.hasPatchPoint();
+  YamlMFI.StackSize = MFI.getStackSize();
+  YamlMFI.OffsetAdjustment = MFI.getOffsetAdjustment();
+  YamlMFI.MaxAlignment = MFI.getMaxAlignment();
+  YamlMFI.AdjustsStack = MFI.adjustsStack();
+  YamlMFI.HasCalls = MFI.hasCalls();
+  YamlMFI.MaxCallFrameSize = MFI.getMaxCallFrameSize();
+  YamlMFI.HasOpaqueSPAdjustment = MFI.hasOpaqueSPAdjustment();
+  YamlMFI.HasVAStart = MFI.hasVAStart();
+  YamlMFI.HasMustTailInVarArgFunc = MFI.hasMustTailInVarArgFunc();
+}
+
+void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
+                                     const MachineFrameInfo &MFI) {
+  unsigned ID = 0;
+  for (int I = 0, E = MFI.getObjectIndexEnd(); I < E; ++I) {
+    if (MFI.isDeadObjectIndex(I))
+      continue;
+
+    yaml::MachineStackObject YamlObject;
+    YamlObject.ID = ID++;
+    YamlObject.Type = MFI.isSpillSlotObjectIndex(I)
+                          ? yaml::MachineStackObject::SpillSlot
+                          : yaml::MachineStackObject::DefaultType;
+    YamlObject.Offset = MFI.getObjectOffset(I);
+    YamlObject.Size = MFI.getObjectSize(I);
+    YamlObject.Alignment = MFI.getObjectAlignment(I);
+
+    MF.StackObjects.push_back(YamlObject);
+    // TODO: Store the mapping between object IDs and object indices to print
+    // the stack object references correctly.
+  }
+}
+
+void MIRPrinter::convert(ModuleSlotTracker &MST,
+                         yaml::MachineBasicBlock &YamlMBB,
                          const MachineBasicBlock &MBB) {
   assert(MBB.getNumber() >= 0 && "Invalid MBB number");
   YamlMBB.ID = (unsigned)MBB.getNumber();
   // TODO: Serialize unnamed BB references.
   if (const auto *BB = MBB.getBasicBlock())
-    YamlMBB.Name = BB->hasName() ? BB->getName() : "<unnamed bb>";
+    YamlMBB.Name.Value = BB->hasName() ? BB->getName() : "<unnamed bb>";
   else
-    YamlMBB.Name = "";
+    YamlMBB.Name.Value = "";
   YamlMBB.Alignment = MBB.getAlignment();
   YamlMBB.AddressTaken = MBB.hasAddressTaken();
   YamlMBB.IsLandingPad = MBB.isLandingPad();
+  for (const auto *SuccMBB : MBB.successors()) {
+    std::string Str;
+    raw_string_ostream StrOS(Str);
+    MIPrinter(StrOS, MST, RegisterMaskIds).printMBBReference(*SuccMBB);
+    YamlMBB.Successors.push_back(StrOS.str());
+  }
 
   // Print the machine instructions.
   YamlMBB.Instructions.reserve(MBB.size());
   std::string Str;
   for (const auto &MI : MBB) {
     raw_string_ostream StrOS(Str);
-    MIPrinter(StrOS).print(MI);
+    MIPrinter(StrOS, MST, RegisterMaskIds).print(MI);
     YamlMBB.Instructions.push_back(StrOS.str());
     Str.clear();
   }
+}
+
+void MIRPrinter::initRegisterMaskIds(const MachineFunction &MF) {
+  const auto *TRI = MF.getSubtarget().getRegisterInfo();
+  unsigned I = 0;
+  for (const uint32_t *Mask : TRI->getRegMasks())
+    RegisterMaskIds.insert(std::make_pair(Mask, I++));
 }
 
 void MIPrinter::print(const MachineInstr &MI) {
@@ -165,19 +250,36 @@ void MIPrinter::print(const MachineInstr &MI) {
 static void printReg(unsigned Reg, raw_ostream &OS,
                      const TargetRegisterInfo *TRI) {
   // TODO: Print Stack Slots.
-  // TODO: Print virtual registers.
   if (!Reg)
     OS << '_';
+  else if (TargetRegisterInfo::isVirtualRegister(Reg))
+    OS << '%' << TargetRegisterInfo::virtReg2Index(Reg);
   else if (Reg < TRI->getNumRegs())
     OS << '%' << StringRef(TRI->getName(Reg)).lower();
   else
     llvm_unreachable("Can't print this kind of register yet");
 }
 
+void MIPrinter::printMBBReference(const MachineBasicBlock &MBB) {
+  OS << "%bb." << MBB.getNumber();
+  if (const auto *BB = MBB.getBasicBlock()) {
+    if (BB->hasName())
+      OS << '.' << BB->getName();
+  }
+}
+
 void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
   switch (Op.getType()) {
   case MachineOperand::MO_Register:
-    // TODO: Print register flags.
+    // TODO: Print the other register flags.
+    if (Op.isImplicit())
+      OS << (Op.isDef() ? "implicit-def " : "implicit ");
+    if (Op.isDead())
+      OS << "dead ";
+    if (Op.isKill())
+      OS << "killed ";
+    if (Op.isUndef())
+      OS << "undef ";
     printReg(Op.getReg(), OS, TRI);
     // TODO: Print sub register.
     break;
@@ -185,12 +287,20 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
     OS << Op.getImm();
     break;
   case MachineOperand::MO_MachineBasicBlock:
-    OS << "%bb." << Op.getMBB()->getNumber();
-    if (const auto *BB = Op.getMBB()->getBasicBlock()) {
-      if (BB->hasName())
-        OS << '.' << BB->getName();
-    }
+    printMBBReference(*Op.getMBB());
     break;
+  case MachineOperand::MO_GlobalAddress:
+    Op.getGlobal()->printAsOperand(OS, /*PrintType=*/false, MST);
+    // TODO: Print offset and target flags.
+    break;
+  case MachineOperand::MO_RegisterMask: {
+    auto RegMaskInfo = RegisterMaskIds.find(Op.getRegMask());
+    if (RegMaskInfo != RegisterMaskIds.end())
+      OS << StringRef(TRI->getRegMaskNames()[RegMaskInfo->second]).lower();
+    else
+      llvm_unreachable("Can't print this machine register mask yet.");
+    break;
+  }
   default:
     // TODO: Print the other machine operands.
     llvm_unreachable("Can't print this machine operand at the moment");

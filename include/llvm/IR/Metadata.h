@@ -76,6 +76,7 @@ public:
     DILexicalBlockKind,
     DILexicalBlockFileKind,
     DINamespaceKind,
+    DIModuleKind,
     DITemplateTypeParameterKind,
     DITemplateValueParameterKind,
     DIGlobalVariableKind,
@@ -124,7 +125,11 @@ public:
   ///
   /// If \c M is provided, metadata nodes will be numbered canonically;
   /// otherwise, pointer addresses are substituted.
+  /// @{
   void print(raw_ostream &OS, const Module *M = nullptr) const;
+  void print(raw_ostream &OS, ModuleSlotTracker &MST,
+             const Module *M = nullptr) const;
+  /// @}
 
   /// \brief Print as operand.
   ///

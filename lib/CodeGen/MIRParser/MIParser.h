@@ -22,13 +22,23 @@ namespace llvm {
 class MachineBasicBlock;
 class MachineInstr;
 class MachineFunction;
+struct SlotMapping;
 class SMDiagnostic;
 class SourceMgr;
 
-MachineInstr *
-parseMachineInstr(SourceMgr &SM, MachineFunction &MF, StringRef Src,
-                  const DenseMap<unsigned, MachineBasicBlock *> &MBBSlots,
-                  SMDiagnostic &Error);
+struct PerFunctionMIParsingState {
+  DenseMap<unsigned, MachineBasicBlock *> MBBSlots;
+  DenseMap<unsigned, unsigned> VirtualRegisterSlots;
+};
+
+bool parseMachineInstr(MachineInstr *&MI, SourceMgr &SM, MachineFunction &MF,
+                       StringRef Src, const PerFunctionMIParsingState &PFS,
+                       const SlotMapping &IRSlots, SMDiagnostic &Error);
+
+bool parseMBBReference(MachineBasicBlock *&MBB, SourceMgr &SM,
+                       MachineFunction &MF, StringRef Src,
+                       const PerFunctionMIParsingState &PFS,
+                       const SlotMapping &IRSlots, SMDiagnostic &Error);
 
 } // end namespace llvm
 

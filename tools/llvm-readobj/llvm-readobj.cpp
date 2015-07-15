@@ -127,6 +127,10 @@ namespace opts {
   cl::opt<bool> ProgramHeaders("program-headers",
     cl::desc("Display ELF program headers"));
 
+  // -hash-table
+  cl::opt<bool> HashTable("hash-table",
+    cl::desc("Display ELF hash table"));
+
   // -expand-relocs
   cl::opt<bool> ExpandRelocs("expand-relocs",
     cl::desc("Expand each shown relocation to multiple lines"));
@@ -176,6 +180,12 @@ namespace opts {
   cl::opt<bool>
   COFFBaseRelocs("coff-basereloc",
                  cl::desc("Display the PE/COFF .reloc section"));
+
+  // -stackmap
+  cl::opt<bool>
+  PrintStackMap("stackmap",
+                cl::desc("Display contents of stackmap section"));
+
 } // namespace opts
 
 static int ReturnValue = EXIT_SUCCESS;
@@ -193,10 +203,7 @@ bool error(std::error_code EC) {
 }
 
 bool relocAddressLess(RelocationRef a, RelocationRef b) {
-  uint64_t a_addr, b_addr;
-  if (error(a.getOffset(a_addr))) exit(ReturnValue);
-  if (error(b.getOffset(b_addr))) exit(ReturnValue);
-  return a_addr < b_addr;
+  return a.getOffset() < b.getOffset();
 }
 
 } // namespace llvm
@@ -297,6 +304,8 @@ static void dumpObject(const ObjectFile *Obj) {
     Dumper->printNeededLibraries();
   if (opts::ProgramHeaders)
     Dumper->printProgramHeaders();
+  if (opts::HashTable)
+    Dumper->printHashTable();
   if (Obj->getArch() == llvm::Triple::arm && Obj->isELF())
     if (opts::ARMAttributes)
       Dumper->printAttributes();
@@ -316,6 +325,9 @@ static void dumpObject(const ObjectFile *Obj) {
     Dumper->printCOFFDirectives();
   if (opts::COFFBaseRelocs)
     Dumper->printCOFFBaseReloc();
+
+  if (opts::PrintStackMap)
+    Dumper->printStackMap();
 }
 
 /// @brief Dumps each object file in \a Arc;

@@ -694,6 +694,12 @@ def int_ppc_vsx_xvrspip :
 def int_ppc_vsx_xvrdpip :
       Intrinsic<[llvm_v2f64_ty], [llvm_v2f64_ty], [IntrNoMem]>;
 
+// Vector rsqrte
+def int_ppc_vsx_xvrsqrtesp : GCCBuiltin<"__builtin_vsx_xvrsqrtesp">,
+      Intrinsic<[llvm_v4f32_ty], [llvm_v4f32_ty], [IntrNoMem]>;
+def int_ppc_vsx_xvrsqrtedp : GCCBuiltin<"__builtin_vsx_xvrsqrtedp">,
+      Intrinsic<[llvm_v2f64_ty], [llvm_v2f64_ty], [IntrNoMem]>;
+
 // Vector compare
 def int_ppc_vsx_xvcmpeqdp :
       PowerPC_VSX_Intrinsic<"xvcmpeqdp", [llvm_v2i64_ty],
@@ -713,6 +719,9 @@ def int_ppc_vsx_xvcmpgtdp :
 def int_ppc_vsx_xvcmpgtsp :
       PowerPC_VSX_Intrinsic<"xvcmpgtsp", [llvm_v4i32_ty],
                             [llvm_v4f32_ty, llvm_v4f32_ty], [IntrNoMem]>;
+def int_ppc_vsx_xxleqv :
+      PowerPC_VSX_Intrinsic<"xxleqv", [llvm_v4i32_ty],
+                            [llvm_v4i32_ty, llvm_v4i32_ty], [IntrNoMem]>;
 }
 
 //===----------------------------------------------------------------------===//

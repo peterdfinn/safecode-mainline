@@ -443,8 +443,9 @@ namespace {
       assert(LHSTy.isInteger() && "Shift amount is not an integer type!");
       if (LHSTy.isVector())
         return LHSTy;
-      return LegalTypes ? TLI.getScalarShiftAmountTy(LHSTy)
-                        : TLI.getPointerTy();
+      auto &DL = DAG.getDataLayout();
+      return LegalTypes ? TLI.getScalarShiftAmountTy(DL, LHSTy)
+                        : TLI.getPointerTy(DL);
     }
 
     /// This method returns true if we are running before type legalization or
@@ -456,7 +457,7 @@ namespace {
 
     /// Convenience wrapper around TargetLowering::getSetCCResultType
     EVT getSetCCResultType(EVT VT) const {
-      return TLI.getSetCCResultType(*DAG.getContext(), VT);
+      return TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
     }
   };
 }
@@ -2178,7 +2179,11 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
   }
 
   // fold (sdiv X, pow2) -> simple ops after legalize
+  // FIXME: We check for the exact bit here because the generic lowering gives
+  // better results in that case. The target-specific lowering should learn how
+  // to handle exact sdivs efficiently.
   if (N1C && !N1C->isNullValue() && !N1C->isOpaque() &&
+      !cast<BinaryWithFlagsSDNode>(N)->Flags.hasExact() &&
       (N1C->getAPIntValue().isPowerOf2() ||
        (-N1C->getAPIntValue()).isPowerOf2())) {
     // If dividing by powers of two is cheap, then don't perform the following
@@ -3107,7 +3112,7 @@ SDValue DAGCombiner::visitAND(SDNode *N) {
           // For big endian targets, we need to add an offset to the pointer
           // to load the correct bytes.  For little endian systems, we merely
           // need to read fewer bytes from the same pointer.
-          if (TLI.isBigEndian()) {
+          if (DAG.getDataLayout().isBigEndian()) {
             unsigned LVTStoreBytes = LoadedVT.getStoreSize();
             unsigned EVTStoreBytes = ExtVT.getStoreSize();
             unsigned PtrOff = LVTStoreBytes - EVTStoreBytes;
@@ -4274,7 +4279,7 @@ SDValue DAGCombiner::visitSHL(SDNode *N) {
   if (isNullConstant(N0))
     return N0;
   // fold (shl x, c >= size(x)) -> undef
-  if (N1C && N1C->getZExtValue() >= OpSizeInBits)
+  if (N1C && N1C->getAPIntValue().uge(OpSizeInBits))
     return DAG.getUNDEF(VT);
   // fold (shl x, 0) -> x
   if (N1C && N1C->isNullValue())
@@ -5575,12 +5580,12 @@ SDValue DAGCombiner::visitSETCC(SDNode *N) {
                        SDLoc(N));
 }
 
-// tryToFoldExtendOfConstant - Try to fold a sext/zext/aext
-// dag node into a ConstantSDNode or a build_vector of constants.
-// This function is called by the DAGCombiner when visiting sext/zext/aext
-// dag nodes (see for example method DAGCombiner::visitSIGN_EXTEND).
-// Vector extends are not folded if operations are legal; this is to
-// avoid introducing illegal build_vector dag nodes.
+/// Try to fold a sext/zext/aext dag node into a ConstantSDNode or 
+/// a build_vector of constants.
+/// This function is called by the DAGCombiner when visiting sext/zext/aext
+/// dag nodes (see for example method DAGCombiner::visitSIGN_EXTEND).
+/// Vector extends are not folded if operations are legal; this is to
+/// avoid introducing illegal build_vector dag nodes.
 static SDNode *tryToFoldExtendOfConstant(SDNode *N, const TargetLowering &TLI,
                                          SelectionDAG &DAG, bool LegalTypes,
                                          bool LegalOperations) {
@@ -5610,7 +5615,6 @@ static SDNode *tryToFoldExtendOfConstant(SDNode *N, const TargetLowering &TLI,
   // We can fold this node into a build_vector.
   unsigned VTBits = SVT.getSizeInBits();
   unsigned EVTBits = N0->getValueType(0).getScalarType().getSizeInBits();
-  unsigned ShAmt = VTBits - EVTBits;
   SmallVector<SDValue, 8> Elts;
   unsigned NumElts = VT.getVectorNumElements();
   SDLoc DL(N);
@@ -5623,14 +5627,13 @@ static SDNode *tryToFoldExtendOfConstant(SDNode *N, const TargetLowering &TLI,
     }
 
     SDLoc DL(Op);
-    ConstantSDNode *CurrentND = cast<ConstantSDNode>(Op);
-    const APInt &C = APInt(VTBits, CurrentND->getAPIntValue().getZExtValue());
+    // Get the constant value and if needed trunc it to the size of the type.
+    // Nodes like build_vector might have constants wider than the scalar type.
+    APInt C = cast<ConstantSDNode>(Op)->getAPIntValue().zextOrTrunc(EVTBits);
     if (Opcode == ISD::SIGN_EXTEND || Opcode == ISD::SIGN_EXTEND_VECTOR_INREG)
-      Elts.push_back(DAG.getConstant(C.shl(ShAmt).ashr(ShAmt).getZExtValue(),
-                                     DL, SVT));
+      Elts.push_back(DAG.getConstant(C.sext(VTBits), DL, SVT));
     else
-      Elts.push_back(DAG.getConstant(C.shl(ShAmt).lshr(ShAmt).getZExtValue(),
-                                     DL, SVT));
+      Elts.push_back(DAG.getConstant(C.zext(VTBits), DL, SVT));
   }
 
   return DAG.getNode(ISD::BUILD_VECTOR, DL, VT, Elts).getNode();
@@ -6673,7 +6676,7 @@ SDValue DAGCombiner::ReduceLoadWidth(SDNode *N) {
 
   // For big endian targets, we need to adjust the offset to the pointer to
   // load the correct bytes.
-  if (TLI.isBigEndian()) {
+  if (DAG.getDataLayout().isBigEndian()) {
     unsigned LVTStoreBits = LN0->getMemoryVT().getStoreSizeInBits();
     unsigned EVTStoreBits = ExtVT.getStoreSizeInBits();
     ShAmt = LVTStoreBits - EVTStoreBits - ShAmt;
@@ -6871,7 +6874,7 @@ SDValue DAGCombiner::visitSIGN_EXTEND_VECTOR_INREG(SDNode *N) {
 SDValue DAGCombiner::visitTRUNCATE(SDNode *N) {
   SDValue N0 = N->getOperand(0);
   EVT VT = N->getValueType(0);
-  bool isLE = TLI.isLittleEndian();
+  bool isLE = DAG.getDataLayout().isLittleEndian();
 
   // noop truncate
   if (N0.getValueType() == N->getValueType(0))
@@ -6924,7 +6927,7 @@ SDValue DAGCombiner::visitTRUNCATE(SDNode *N) {
     SDValue EltNo = N0->getOperand(1);
     if (isa<ConstantSDNode>(EltNo) && isTypeLegal(NVT)) {
       int Elt = cast<ConstantSDNode>(EltNo)->getZExtValue();
-      EVT IndexTy = TLI.getVectorIdxTy();
+      EVT IndexTy = TLI.getVectorIdxTy(DAG.getDataLayout());
       int Index = isLE ? (Elt*SizeRatio) : (Elt*SizeRatio + (SizeRatio-1));
 
       SDValue V = DAG.getNode(ISD::BITCAST, SDLoc(N),
@@ -7091,8 +7094,8 @@ SDValue DAGCombiner::CombineConsecutiveLoads(SDNode *N, EVT VT) {
       !LD2->isVolatile() &&
       DAG.isConsecutiveLoad(LD2, LD1, LD1VT.getSizeInBits()/8, 1)) {
     unsigned Align = LD1->getAlignment();
-    unsigned NewAlign = TLI.getDataLayout()->
-      getABITypeAlignment(VT.getTypeForEVT(*DAG.getContext()));
+    unsigned NewAlign = DAG.getDataLayout().getABITypeAlignment(
+        VT.getTypeForEVT(*DAG.getContext()));
 
     if (NewAlign <= Align &&
         (!LegalOperations || TLI.isOperationLegal(ISD::LOAD, VT)))
@@ -7148,13 +7151,13 @@ SDValue DAGCombiner::visitBITCAST(SDNode *N) {
       // Do not change the width of a volatile load.
       !cast<LoadSDNode>(N0)->isVolatile() &&
       // Do not remove the cast if the types differ in endian layout.
-      TLI.hasBigEndianPartOrdering(N0.getValueType()) ==
-      TLI.hasBigEndianPartOrdering(VT) &&
+      TLI.hasBigEndianPartOrdering(N0.getValueType(), DAG.getDataLayout()) ==
+          TLI.hasBigEndianPartOrdering(VT, DAG.getDataLayout()) &&
       (!LegalOperations || TLI.isOperationLegal(ISD::LOAD, VT)) &&
       TLI.isLoadBitCastBeneficial(N0.getValueType(), VT)) {
     LoadSDNode *LN0 = cast<LoadSDNode>(N0);
-    unsigned Align = TLI.getDataLayout()->
-      getABITypeAlignment(VT.getTypeForEVT(*DAG.getContext()));
+    unsigned Align = DAG.getDataLayout().getABITypeAlignment(
+        VT.getTypeForEVT(*DAG.getContext()));
     unsigned OrigAlign = LN0->getAlignment();
 
     if (Align <= OrigAlign) {
@@ -7366,7 +7369,7 @@ ConstantFoldBITCASTofBUILD_VECTOR(SDNode *BV, EVT DstEltVT) {
     SmallVector<SDValue, 8> Ops;
     for (unsigned i = 0, e = BV->getNumOperands(); i != e;
          i += NumInputsPerOutput) {
-      bool isLE = TLI.isLittleEndian();
+      bool isLE = DAG.getDataLayout().isLittleEndian();
       APInt NewBits = APInt(DstBitSize, 0);
       bool EltIsUndef = true;
       for (unsigned j = 0; j != NumInputsPerOutput; ++j) {
@@ -7413,7 +7416,7 @@ ConstantFoldBITCASTofBUILD_VECTOR(SDNode *BV, EVT DstEltVT) {
     }
 
     // For big endian targets, swap the order of the pieces of each element.
-    if (TLI.isBigEndian())
+    if (DAG.getDataLayout().isBigEndian())
       std::reverse(Ops.end()-NumOutputsPerInput, Ops.end());
   }
 
@@ -8371,6 +8374,9 @@ SDValue DAGCombiner::visitFDIV(SDNode *N) {
 
     if (TLI.combineRepeatedFPDivisors(Users.size())) {
       SDValue FPOne = DAG.getConstantFP(1.0, DL, VT);
+      // FIXME: This optimization requires some level of fast-math, so the
+      // created reciprocal node should at least have the 'allowReciprocal'
+      // fast-math-flag set.
       SDValue Reciprocal = DAG.getNode(ISD::FDIV, DL, VT, FPOne, N1);
 
       // Dividend / Divisor -> Dividend * Reciprocal
@@ -8379,10 +8385,14 @@ SDValue DAGCombiner::visitFDIV(SDNode *N) {
         if (Dividend != FPOne) {
           SDValue NewNode = DAG.getNode(ISD::FMUL, SDLoc(U), VT, Dividend,
                                         Reciprocal);
-          DAG.ReplaceAllUsesWith(U, NewNode.getNode());
+          CombineTo(U, NewNode);
+        } else if (U != Reciprocal.getNode()) {
+          // In the absence of fast-math-flags, this user node is always the
+          // same node as Reciprocal, but with FMF they may be different nodes.
+          CombineTo(U, Reciprocal);
         }
       }
-      return SDValue();
+      return SDValue(N, 0);  // N was replaced.
     }
   }
 
@@ -8404,30 +8414,29 @@ SDValue DAGCombiner::visitFREM(SDNode *N) {
 }
 
 SDValue DAGCombiner::visitFSQRT(SDNode *N) {
-  if (DAG.getTarget().Options.UnsafeFPMath &&
-      !TLI.isFsqrtCheap()) {
-    // Compute this as X * (1/sqrt(X)) = X * (X ** -0.5)
-    if (SDValue RV = BuildRsqrtEstimate(N->getOperand(0))) {
-      EVT VT = RV.getValueType();
-      SDLoc DL(N);
-      RV = DAG.getNode(ISD::FMUL, DL, VT, N->getOperand(0), RV);
-      AddToWorklist(RV.getNode());
+  if (!DAG.getTarget().Options.UnsafeFPMath || TLI.isFsqrtCheap())
+    return SDValue();
 
-      // Unfortunately, RV is now NaN if the input was exactly 0.
-      // Select out this case and force the answer to 0.
-      SDValue Zero = DAG.getConstantFP(0.0, DL, VT);
-      SDValue ZeroCmp =
-        DAG.getSetCC(DL, TLI.getSetCCResultType(*DAG.getContext(), VT),
-                     N->getOperand(0), Zero, ISD::SETEQ);
-      AddToWorklist(ZeroCmp.getNode());
-      AddToWorklist(RV.getNode());
+  // Compute this as X * (1/sqrt(X)) = X * (X ** -0.5)
+  SDValue RV = BuildRsqrtEstimate(N->getOperand(0));
+  if (!RV)
+    return SDValue();
+  
+  EVT VT = RV.getValueType();
+  SDLoc DL(N);
+  RV = DAG.getNode(ISD::FMUL, DL, VT, N->getOperand(0), RV);
+  AddToWorklist(RV.getNode());
 
-      RV = DAG.getNode(VT.isVector() ? ISD::VSELECT : ISD::SELECT,
-                       DL, VT, ZeroCmp, Zero, RV);
-      return RV;
-    }
-  }
-  return SDValue();
+  // Unfortunately, RV is now NaN if the input was exactly 0.
+  // Select out this case and force the answer to 0.
+  SDValue Zero = DAG.getConstantFP(0.0, DL, VT);
+  EVT CCVT = TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
+  SDValue ZeroCmp = DAG.getSetCC(DL, CCVT, N->getOperand(0), Zero, ISD::SETEQ);
+  AddToWorklist(ZeroCmp.getNode());
+  AddToWorklist(RV.getNode());
+
+  return DAG.getNode(VT.isVector() ? ISD::VSELECT : ISD::SELECT, DL, VT,
+                     ZeroCmp, Zero, RV);
 }
 
 SDValue DAGCombiner::visitFCOPYSIGN(SDNode *N) {
@@ -9142,7 +9151,8 @@ static bool canFoldInAddressingMode(SDNode *N, SDNode *Use,
   } else
     return false;
 
-  return TLI.isLegalAddressingMode(AM, VT.getTypeForEVT(*DAG.getContext()), AS);
+  return TLI.isLegalAddressingMode(DAG.getDataLayout(), AM,
+                                   VT.getTypeForEVT(*DAG.getContext()), AS);
 }
 
 /// Try turning a load/store into a pre-indexed load/store when the base
@@ -9867,8 +9877,7 @@ struct LoadedSlice {
   /// \pre DAG != nullptr.
   uint64_t getOffsetFromBase() const {
     assert(DAG && "Missing context.");
-    bool IsBigEndian =
-        DAG->getTargetLoweringInfo().getDataLayout()->isBigEndian();
+    bool IsBigEndian = DAG->getDataLayout().isBigEndian();
     assert(!(Shift & 0x7) && "Shifts not aligned on Bytes are not supported.");
     uint64_t Offset = Shift / 8;
     unsigned TySizeInBytes = Origin->getValueSizeInBits(0) / 8;
@@ -9951,7 +9960,7 @@ struct LoadedSlice {
 
     // Check if it will be merged with the load.
     // 1. Check the alignment constraint.
-    unsigned RequiredAlignment = TLI.getDataLayout()->getABITypeAlignment(
+    unsigned RequiredAlignment = DAG->getDataLayout().getABITypeAlignment(
         ResVT.getTypeForEVT(*DAG->getContext()));
 
     if (RequiredAlignment > getAlignment())
@@ -10319,7 +10328,7 @@ ShrinkLoadReplaceStoreWithStore(const std::pair<unsigned, unsigned> &MaskInfo,
   unsigned StOffset;
   unsigned NewAlign = St->getAlignment();
 
-  if (DAG.getTargetLoweringInfo().isLittleEndian())
+  if (DAG.getDataLayout().isLittleEndian())
     StOffset = ByteShift;
   else
     StOffset = IVal.getValueType().getStoreSize() - ByteShift - NumBytes;
@@ -10432,12 +10441,12 @@ SDValue DAGCombiner::ReduceLoadOpStoreWidth(SDNode *N) {
       uint64_t PtrOff = ShAmt / 8;
       // For big endian targets, we need to adjust the offset to the pointer to
       // load the correct bytes.
-      if (TLI.isBigEndian())
+      if (DAG.getDataLayout().isBigEndian())
         PtrOff = (BitWidth + 7 - NewBW) / 8 - PtrOff;
 
       unsigned NewAlign = MinAlign(LD->getAlignment(), PtrOff);
       Type *NewVTTy = NewVT.getTypeForEVT(*DAG.getContext());
-      if (NewAlign < TLI.getDataLayout()->getABITypeAlignment(NewVTTy))
+      if (NewAlign < DAG.getDataLayout().getABITypeAlignment(NewVTTy))
         return SDValue();
 
       SDValue NewPtr = DAG.getNode(ISD::ADD, SDLoc(LD),
@@ -10501,7 +10510,7 @@ SDValue DAGCombiner::TransformFPLoadStorePair(SDNode *N) {
     unsigned LDAlign = LD->getAlignment();
     unsigned STAlign = ST->getAlignment();
     Type *IntVTTy = IntVT.getTypeForEVT(*DAG.getContext());
-    unsigned ABIAlign = TLI.getDataLayout()->getABITypeAlignment(IntVTTy);
+    unsigned ABIAlign = DAG.getDataLayout().getABITypeAlignment(IntVTTy);
     if (LDAlign < ABIAlign || STAlign < ABIAlign)
       return SDValue();
 
@@ -10683,7 +10692,7 @@ bool DAGCombiner::MergeStoresOfConstantsOrVecElts(
 
     // Construct a single integer constant which is made of the smaller
     // constant inputs.
-    bool IsLE = TLI.isLittleEndian();
+    bool IsLE = DAG.getDataLayout().isLittleEndian();
     for (unsigned i = 0; i < NumElem ; ++i) {
       unsigned Idx = IsLE ? (NumElem - 1 - i) : i;
       StoreSDNode *St  = cast<StoreSDNode>(StoreNodes[Idx].MemNode);
@@ -10741,7 +10750,7 @@ static bool allowableAlignment(const SelectionDAG &DAG,
     return true;
 
   Type *Ty = EVTTy.getTypeForEVT(*DAG.getContext());
-  unsigned ABIAlignment = TLI.getDataLayout()->getPrefTypeAlignment(Ty);
+  unsigned ABIAlignment = DAG.getDataLayout().getPrefTypeAlignment(Ty);
   return (Align >= ABIAlignment);
 }
 
@@ -11203,8 +11212,8 @@ SDValue DAGCombiner::visitSTORE(SDNode *N) {
       ST->isUnindexed()) {
     unsigned OrigAlign = ST->getAlignment();
     EVT SVT = Value.getOperand(0).getValueType();
-    unsigned Align = TLI.getDataLayout()->
-      getABITypeAlignment(SVT.getTypeForEVT(*DAG.getContext()));
+    unsigned Align = DAG.getDataLayout().getABITypeAlignment(
+        SVT.getTypeForEVT(*DAG.getContext()));
     if (Align <= OrigAlign &&
         ((!LegalOperations && !ST->isVolatile()) ||
          TLI.isOperationLegalOrCustom(ISD::STORE, SVT)))
@@ -11263,7 +11272,8 @@ SDValue DAGCombiner::visitSTORE(SDNode *N) {
           uint64_t Val = CFP->getValueAPF().bitcastToAPInt().getZExtValue();
           SDValue Lo = DAG.getConstant(Val & 0xFFFFFFFF, SDLoc(CFP), MVT::i32);
           SDValue Hi = DAG.getConstant(Val >> 32, SDLoc(CFP), MVT::i32);
-          if (TLI.isBigEndian()) std::swap(Lo, Hi);
+          if (DAG.getDataLayout().isBigEndian())
+            std::swap(Lo, Hi);
 
           unsigned Alignment = ST->getAlignment();
           bool isVolatile = ST->isVolatile();
@@ -11512,7 +11522,7 @@ SDValue DAGCombiner::ReplaceExtractVectorEltOfLoadWithNarrowedLoad(
   EVT ResultVT = EVE->getValueType(0);
   EVT VecEltVT = InVecVT.getVectorElementType();
   unsigned Align = OriginalLoad->getAlignment();
-  unsigned NewAlign = TLI.getDataLayout()->getABITypeAlignment(
+  unsigned NewAlign = DAG.getDataLayout().getABITypeAlignment(
       VecEltVT.getTypeForEVT(*DAG.getContext()));
 
   if (NewAlign > Align || !TLI.isOperationLegalOrCustom(ISD::LOAD, VecEltVT))
@@ -11646,7 +11656,7 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
     // scalar_to_vector here as well.
 
     if (!LegalOperations) {
-      EVT IndexTy = TLI.getVectorIdxTy();
+      EVT IndexTy = TLI.getVectorIdxTy(DAG.getDataLayout());
       return DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SDLoc(N), NVT, SVInVec,
                          DAG.getConstant(OrigElt, SDLoc(SVOp), IndexTy));
     }
@@ -11823,7 +11833,7 @@ SDValue DAGCombiner::reduceBuildVecExtToExtBuildVec(SDNode *N) {
   if (!ValidTypes)
     return SDValue();
 
-  bool isLE = TLI.isLittleEndian();
+  bool isLE = DAG.getDataLayout().isLittleEndian();
   unsigned ElemRatio = OutScalarTy.getSizeInBits()/SourceType.getSizeInBits();
   assert(ElemRatio > 1 && "Invalid element size ratio");
   SDValue Filler = AllAnyExt ? DAG.getUNDEF(SourceType):
@@ -12077,10 +12087,13 @@ SDValue DAGCombiner::visitBUILD_VECTOR(SDNode *N) {
 
         // Try to replace VecIn1 with two extract_subvectors
         // No need to update the masks, they should still be correct.
-        VecIn2 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
-          DAG.getConstant(VT.getVectorNumElements(), dl, TLI.getVectorIdxTy()));
-        VecIn1 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
-          DAG.getConstant(0, dl, TLI.getVectorIdxTy()));
+        VecIn2 = DAG.getNode(
+            ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
+            DAG.getConstant(VT.getVectorNumElements(), dl,
+                            TLI.getVectorIdxTy(DAG.getDataLayout())));
+        VecIn1 = DAG.getNode(
+            ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
+            DAG.getConstant(0, dl, TLI.getVectorIdxTy(DAG.getDataLayout())));
       } else
         return SDValue();
     }
@@ -13352,12 +13365,13 @@ SDValue DAGCombiner::SimplifySelectCC(SDLoc DL, SDValue N0, SDValue N1,
           const_cast<ConstantFP*>(TV->getConstantFPValue())
         };
         Type *FPTy = Elts[0]->getType();
-        const DataLayout &TD = *TLI.getDataLayout();
+        const DataLayout &TD = DAG.getDataLayout();
 
         // Create a ConstantArray of the two constants.
         Constant *CA = ConstantArray::get(ArrayType::get(FPTy, 2), Elts);
-        SDValue CPIdx = DAG.getConstantPool(CA, TLI.getPointerTy(),
-                                            TD.getPrefTypeAlignment(FPTy));
+        SDValue CPIdx =
+            DAG.getConstantPool(CA, TLI.getPointerTy(DAG.getDataLayout()),
+                                TD.getPrefTypeAlignment(FPTy));
         unsigned Alignment = cast<ConstantPoolSDNode>(CPIdx)->getAlignment();
 
         // Get the offsets to the 0 and 1 element of the array so that we can
@@ -13829,6 +13843,15 @@ bool DAGCombiner::isAlias(LSBaseSDNode *Op0, LSBaseSDNode *Op1) const {
 
   // If they are both volatile then they cannot be reordered.
   if (Op0->isVolatile() && Op1->isVolatile()) return true;
+
+  // If one operation reads from invariant memory, and the other may store, they
+  // cannot alias. These should really be checking the equivalent of mayWrite,
+  // but it only matters for memory nodes other than load /store.
+  if (Op0->isInvariant() && Op1->writeMem())
+    return false;
+
+  if (Op1->isInvariant() && Op0->writeMem())
+    return false;
 
   // Gather base node and offset information.
   SDValue Base1, Base2;

@@ -170,7 +170,7 @@ class BitcodeReader : public GVMaterializer {
 
   // When intrinsic functions are encountered which require upgrading they are
   // stored here with their replacement function.
-  typedef std::vector<std::pair<Function*, Function*> > UpgradedIntrinsicMap;
+  typedef DenseMap<Function*, Function*> UpgradedIntrinsicMap;
   UpgradedIntrinsicMap UpgradedIntrinsics;
 
   // Map the bitcode's custom MDKind ID to the Module's MDKind ID.
@@ -697,6 +697,21 @@ static Comdat::SelectionKind getDecodedComdatSelectionKind(unsigned Val) {
   }
 }
 
+static FastMathFlags getDecodedFastMathFlags(unsigned Val) {
+  FastMathFlags FMF;
+  if (0 != (Val & FastMathFlags::UnsafeAlgebra))
+    FMF.setUnsafeAlgebra();
+  if (0 != (Val & FastMathFlags::NoNaNs))
+    FMF.setNoNaNs();
+  if (0 != (Val & FastMathFlags::NoInfs))
+    FMF.setNoInfs();
+  if (0 != (Val & FastMathFlags::NoSignedZeros))
+    FMF.setNoSignedZeros();
+  if (0 != (Val & FastMathFlags::AllowReciprocal))
+    FMF.setAllowReciprocal();
+  return FMF;
+}
+
 static void upgradeDLLImportExportLinkage(llvm::GlobalValue *GV, unsigned Val) {
   switch (Val) {
   case 5: GV->setDLLStorageClass(GlobalValue::DLLImportStorageClass); break;
@@ -1075,6 +1090,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::Alignment;
   case bitc::ATTR_KIND_ALWAYS_INLINE:
     return Attribute::AlwaysInline;
+  case bitc::ATTR_KIND_ARGMEMONLY:
+    return Attribute::ArgMemOnly;
   case bitc::ATTR_KIND_BUILTIN:
     return Attribute::Builtin;
   case bitc::ATTR_KIND_BY_VAL:
@@ -1827,6 +1844,20 @@ std::error_code BitcodeReader::parseMetadata() {
           NextMDValueNo++);
       break;
     }
+
+    case bitc::METADATA_MODULE: {
+      if (Record.size() != 6)
+        return error("Invalid record");
+
+      MDValueList.assignValue(
+          GET_OR_DISTINCT(DIModule, Record[0],
+                          (Context, getMDOrNull(Record[1]),
+                          getMDString(Record[2]), getMDString(Record[3]),
+                          getMDString(Record[4]), getMDString(Record[5]))),
+          NextMDValueNo++);
+      break;
+    }
+
     case bitc::METADATA_FILE: {
       if (Record.size() != 3)
         return error("Invalid record");
@@ -2696,7 +2727,7 @@ std::error_code BitcodeReader::globalCleanup() {
   for (Function &F : *TheModule) {
     Function *NewFn;
     if (UpgradeIntrinsicFunction(&F, NewFn))
-      UpgradedIntrinsics.push_back(std::make_pair(&F, NewFn));
+      UpgradedIntrinsics[&F] = NewFn;
   }
 
   // Look for global variables which need to be renamed.
@@ -3458,17 +3489,7 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
           if (Record[OpNum] & (1 << bitc::PEO_EXACT))
             cast<BinaryOperator>(I)->setIsExact(true);
         } else if (isa<FPMathOperator>(I)) {
-          FastMathFlags FMF;
-          if (0 != (Record[OpNum] & FastMathFlags::UnsafeAlgebra))
-            FMF.setUnsafeAlgebra();
-          if (0 != (Record[OpNum] & FastMathFlags::NoNaNs))
-            FMF.setNoNaNs();
-          if (0 != (Record[OpNum] & FastMathFlags::NoInfs))
-            FMF.setNoInfs();
-          if (0 != (Record[OpNum] & FastMathFlags::NoSignedZeros))
-            FMF.setNoSignedZeros();
-          if (0 != (Record[OpNum] & FastMathFlags::AllowReciprocal))
-            FMF.setAllowReciprocal();
+          FastMathFlags FMF = getDecodedFastMathFlags(Record[OpNum]);
           if (FMF.any())
             I->setFastMathFlags(FMF);
         }
@@ -3725,14 +3746,25 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       unsigned OpNum = 0;
       Value *LHS, *RHS;
       if (getValueTypePair(Record, OpNum, NextValueNo, LHS) ||
-          popValue(Record, OpNum, NextValueNo, LHS->getType(), RHS) ||
-          OpNum+1 != Record.size())
+          popValue(Record, OpNum, NextValueNo, LHS->getType(), RHS))
+        return error("Invalid record");
+
+      unsigned PredVal = Record[OpNum];
+      bool IsFP = LHS->getType()->isFPOrFPVectorTy();
+      FastMathFlags FMF;
+      if (IsFP && Record.size() > OpNum+1)
+        FMF = getDecodedFastMathFlags(Record[++OpNum]);
+
+      if (OpNum+1 != Record.size())
         return error("Invalid record");
 
       if (LHS->getType()->isFPOrFPVectorTy())
-        I = new FCmpInst((FCmpInst::Predicate)Record[OpNum], LHS, RHS);
+        I = new FCmpInst((FCmpInst::Predicate)PredVal, LHS, RHS);
       else
-        I = new ICmpInst((ICmpInst::Predicate)Record[OpNum], LHS, RHS);
+        I = new ICmpInst((ICmpInst::Predicate)PredVal, LHS, RHS);
+
+      if (FMF.any())
+        I->setFastMathFlags(FMF);
       InstructionList.push_back(I);
       break;
     }
@@ -4443,14 +4475,12 @@ std::error_code BitcodeReader::materialize(GlobalValue *GV) {
     stripDebugInfo(*F);
 
   // Upgrade any old intrinsic calls in the function.
-  for (UpgradedIntrinsicMap::iterator I = UpgradedIntrinsics.begin(),
-       E = UpgradedIntrinsics.end(); I != E; ++I) {
-    if (I->first != I->second) {
-      for (auto UI = I->first->user_begin(), UE = I->first->user_end();
-           UI != UE;) {
-        if (CallInst* CI = dyn_cast<CallInst>(*UI++))
-          UpgradeIntrinsicCall(CI, I->second);
-      }
+  for (auto &I : UpgradedIntrinsics) {
+    for (auto UI = I.first->user_begin(), UE = I.first->user_end(); UI != UE;) {
+      User *U = *UI;
+      ++UI;
+      if (CallInst *CI = dyn_cast<CallInst>(U))
+        UpgradeIntrinsicCall(CI, I.second);
     }
   }
 
@@ -4517,20 +4547,16 @@ std::error_code BitcodeReader::materializeModule(Module *M) {
   // delete the old functions to clean up. We can't do this unless the entire
   // module is materialized because there could always be another function body
   // with calls to the old function.
-  for (std::vector<std::pair<Function*, Function*> >::iterator I =
-       UpgradedIntrinsics.begin(), E = UpgradedIntrinsics.end(); I != E; ++I) {
-    if (I->first != I->second) {
-      for (auto UI = I->first->user_begin(), UE = I->first->user_end();
-           UI != UE;) {
-        if (CallInst* CI = dyn_cast<CallInst>(*UI++))
-          UpgradeIntrinsicCall(CI, I->second);
-      }
-      if (!I->first->use_empty())
-        I->first->replaceAllUsesWith(I->second);
-      I->first->eraseFromParent();
+  for (auto &I : UpgradedIntrinsics) {
+    for (auto *U : I.first->users()) {
+      if (CallInst *CI = dyn_cast<CallInst>(U))
+        UpgradeIntrinsicCall(CI, I.second);
     }
+    if (!I.first->use_empty())
+      I.first->replaceAllUsesWith(I.second);
+    I.first->eraseFromParent();
   }
-  std::vector<std::pair<Function*, Function*> >().swap(UpgradedIntrinsics);
+  UpgradedIntrinsics.clear();
 
   for (unsigned I = 0, E = InstsWithTBAATag.size(); I < E; I++)
     UpgradeInstWithTBAATag(InstsWithTBAATag[I]);

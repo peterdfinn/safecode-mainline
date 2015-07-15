@@ -22,6 +22,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <iterator>
@@ -989,10 +990,14 @@ public:
                                    Ptr->getType()->getPointerAddressSpace());
     // Vector GEP
     if (Ptr->getType()->isVectorTy()) {
-      unsigned NumElem = cast<VectorType>(Ptr->getType())->getNumElements();
+      unsigned NumElem = Ptr->getType()->getVectorNumElements();
       return VectorType::get(PtrTy, NumElem);
     }
-
+    for (Value *Index : IdxList)
+      if (Index->getType()->isVectorTy()) {
+        unsigned NumElem = Index->getType()->getVectorNumElements();
+        return VectorType::get(PtrTy, NumElem);
+      }
     // Scalar GEP
     return PtrTy;
   }
@@ -1508,6 +1513,9 @@ public:
   /// addAttribute - adds the attribute to the list of attributes.
   void addAttribute(unsigned i, Attribute::AttrKind attr);
 
+  /// addAttribute - adds the attribute to the list of attributes.
+  void addAttribute(unsigned i, StringRef Kind, StringRef Value);
+
   /// removeAttribute - removes the attribute from the list of attributes.
   void removeAttribute(unsigned i, Attribute attr);
 
@@ -1522,6 +1530,11 @@ public:
   bool hasFnAttr(Attribute::AttrKind A) const {
     assert(A != Attribute::NoBuiltin &&
            "Use CallInst::isNoBuiltin() to check for Attribute::NoBuiltin");
+    return hasFnAttrImpl(A);
+  }
+
+  /// \brief Determine whether this call has the given attribute.
+  bool hasFnAttr(StringRef A) const {
     return hasFnAttrImpl(A);
   }
 
@@ -1580,6 +1593,15 @@ public:
   }
   void setOnlyReadsMemory() {
     addAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly);
+  }
+
+  /// @brief Determine if the call can access memmory only using pointers based
+  /// on its arguments.
+  bool onlyAccessesArgMemory() const {
+    return hasFnAttr(Attribute::ArgMemOnly);
+  }
+  void setOnlyAccessesArgMemory() {
+    addAttribute(AttributeSet::FunctionIndex, Attribute::ArgMemOnly);
   }
 
   /// \brief Determine if the call cannot return.
@@ -1651,7 +1673,14 @@ public:
   }
 private:
 
-  bool hasFnAttrImpl(Attribute::AttrKind A) const;
+  template<typename AttrKind>
+  bool hasFnAttrImpl(AttrKind A) const {
+    if (AttributeList.hasAttribute(AttributeSet::FunctionIndex, A))
+      return true;
+    if (const Function *F = getCalledFunction())
+      return F->getAttributes().hasAttribute(AttributeSet::FunctionIndex, A);
+    return false;
+  }
 
   // Shadow Instruction::setInstructionSubclassData with a private forwarding
   // method so that subclasses cannot accidentally use it.
@@ -3342,6 +3371,15 @@ public:
   }
   void setOnlyReadsMemory() {
     addAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly);
+  }
+
+  /// @brief Determine if the call access memmory only using it's pointer
+  /// arguments.
+  bool onlyAccessesArgMemory() const {
+    return hasFnAttr(Attribute::ArgMemOnly);
+  }
+  void setOnlyAccessesArgMemory() {
+    addAttribute(AttributeSet::FunctionIndex, Attribute::ArgMemOnly);
   }
 
   /// \brief Determine if the call cannot return.
