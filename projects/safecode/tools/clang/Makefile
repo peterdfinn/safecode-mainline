@@ -42,7 +42,10 @@ endif
 # Common Makefile code, shared by all Clang Makefiles.
 
 # Set LLVM source root level.
-LEVEL := $(CLANG_LEVEL)/../..
+LEVEL := $(CLANG_LEVEL)/../../../..
+
+LLVM_OBJ_ROOT := $(LEVEL)/../build
+LLVM_SRC_ROOT := $(LEVEL)
 
 # Include LLVM common makefile.
 include $(LEVEL)/Makefile.common

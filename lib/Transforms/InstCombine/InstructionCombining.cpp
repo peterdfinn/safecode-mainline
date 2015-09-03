@@ -519,7 +519,7 @@ static Value *tryFactorization(InstCombiner::BuilderTy *Builder,
           if (isa<OverflowingBinaryOperator>(Op1))
             HasNSW &= Op1->hasNoSignedWrap();
 
-        // We can propogate 'nsw' if we know that
+        // We can propagate 'nsw' if we know that
         //  %Y = mul nsw i16 %X, C
         //  %Z = add nsw i16 %Y, %X
         // =>
@@ -621,6 +621,33 @@ Value *InstCombiner::SimplifyUsingDistributiveLaws(BinaryOperator &I) {
         A->takeName(&I);
         return A;
       }
+  }
+
+  // (op (select (a, c, b)), (select (a, d, b))) -> (select (a, (op c, d), 0))
+  // (op (select (a, b, c)), (select (a, b, d))) -> (select (a, 0, (op c, d)))
+  if (auto *SI0 = dyn_cast<SelectInst>(LHS)) {
+    if (auto *SI1 = dyn_cast<SelectInst>(RHS)) {
+      if (SI0->getCondition() == SI1->getCondition()) {
+        Value *SI = nullptr;
+        if (Value *V = SimplifyBinOp(TopLevelOpcode, SI0->getFalseValue(),
+                                     SI1->getFalseValue(), DL, TLI, DT, AC))
+          SI = Builder->CreateSelect(SI0->getCondition(),
+                                     Builder->CreateBinOp(TopLevelOpcode,
+                                                          SI0->getTrueValue(),
+                                                          SI1->getTrueValue()),
+                                     V);
+        if (Value *V = SimplifyBinOp(TopLevelOpcode, SI0->getTrueValue(),
+                                     SI1->getTrueValue(), DL, TLI, DT, AC))
+          SI = Builder->CreateSelect(
+              SI0->getCondition(), V,
+              Builder->CreateBinOp(TopLevelOpcode, SI0->getFalseValue(),
+                                   SI1->getFalseValue()));
+        if (SI) {
+          SI->takeName(&I);
+          return SI;
+        }
+      }
+    }
   }
 
   return nullptr;
@@ -2645,7 +2672,7 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   assert(I->hasOneUse() && "Invariants didn't hold!");
 
   // Cannot move control-flow-involving, volatile loads, vaarg, etc.
-  if (isa<PHINode>(I) || isa<LandingPadInst>(I) || I->mayHaveSideEffects() ||
+  if (isa<PHINode>(I) || I->isEHPad() || I->mayHaveSideEffects() ||
       isa<TerminatorInst>(I))
     return false;
 
@@ -2900,8 +2927,8 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
       }
     }
 
-    for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-      Worklist.push_back(TI->getSuccessor(i));
+    for (BasicBlock *SuccBB : TI->successors())
+      Worklist.push_back(SuccBB);
   } while (!Worklist.empty());
 
   // Once we've found all of the instructions to add to instcombine's worklist,
@@ -2948,7 +2975,7 @@ static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
       Instruction *Inst = --I;
       if (!Inst->use_empty())
         Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
-      if (isa<LandingPadInst>(Inst)) {
+      if (Inst->isEHPad()) {
         EndInst = Inst;
         continue;
       }

@@ -140,7 +140,7 @@ SrcMakefiles       := $(filter %Makefile %Makefile.tests,\
                       $(wildcard $(PROJ_SRC_DIR)/Makefile*))
 ObjMakefiles       := $(subst $(PROJ_SRC_DIR),$(PROJ_OBJ_DIR),$(SrcMakefiles))
 ConfigureScript    := $(PROJ_SRC_ROOT)/configure
-ConfigStatusScript := $(PROJ_OBJ_ROOT)/config.status
+ConfigStatusScript := $(LLVM_OBJ_ROOT)/config.status
 MakefileConfigIn   := $(strip $(wildcard $(PROJ_SRC_ROOT)/Makefile.config.in))
 MakefileCommonIn   := $(strip $(wildcard $(PROJ_SRC_ROOT)/Makefile.common.in))
 MakefileConfig     := $(PROJ_OBJ_ROOT)/Makefile.config
@@ -168,10 +168,10 @@ endif
 
 ifneq ($(PROJ_OBJ_ROOT),$(PROJ_SRC_ROOT))
 spotless:
-	$(Verb) if test -x config.status ; then \
+	$(Verb) if test -x $(PROJ_OBJ_ROOT)/config.status ; then \
 	  $(EchoCmd) Wiping out $(PROJ_OBJ_ROOT) ; \
 	  $(MKDIR) .spotless.save ; \
-	  $(MV) config.status .spotless.save ; \
+	  $(MV) $(PROJ_OBJ_ROOT)/config.status .spotless.save ; \
 	  $(MV) mklib  .spotless.save ; \
 	  $(MV) projects  .spotless.save ; \
 	  $(RM) -rf * ; \
@@ -686,7 +686,7 @@ endif
 CompileCommonOpts += -Wall -W -Wno-unused-parameter -Wwrite-strings \
                      $(EXTRA_OPTIONS) $(COVERED_SWITCH_DEFAULT) \
                      $(NO_UNINITIALIZED) $(NO_MAYBE_UNINITIALIZED) \
-                     $(NO_MISSING_FIELD_INITIALIZERS) $(NO_COMMENT)
+                     $(MISSING_FIELD_INITIALIZERS) $(NO_COMMENT)
 # Enable cast-qual for C++; the workaround is to use const_cast.
 CXX.Flags += -Wcast-qual
 

@@ -79,6 +79,7 @@ namespace llvm {
 
       EH_SJLJ_SETJMP,         // SjLj exception handling setjmp.
       EH_SJLJ_LONGJMP,        // SjLj exception handling longjmp.
+      EH_SJLJ_SETUP_DISPATCH, // SjLj exception handling setup_dispatch.
 
       TC_RETURN,    // Tail call return pseudo.
 
@@ -171,12 +172,6 @@ namespace llvm {
       // operands need to be legalized.  Define an ARM-specific version of
       // BUILD_VECTOR for this purpose.
       BUILD_VECTOR,
-
-      // Floating-point max and min:
-      FMAX,
-      FMIN,
-      VMAXNM,
-      VMINNM,
 
       // Bit-field insert
       BFI,
@@ -496,6 +491,7 @@ namespace llvm {
                              ISD::ArgFlagsTy Flags) const;
     SDValue LowerEH_SJLJ_SETJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerEH_SJLJ_SETUP_DISPATCH(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
                                     const ARMSubtarget *Subtarget) const;
     SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;

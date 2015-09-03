@@ -68,7 +68,6 @@ void initializeADCEPass(PassRegistry&);
 void initializeBDCEPass(PassRegistry&);
 void initializeAliasAnalysisAnalysisGroup(PassRegistry&);
 void initializeAliasAnalysisCounterPass(PassRegistry&);
-void initializeAliasDebuggerPass(PassRegistry&);
 void initializeAliasSetPrinterPass(PassRegistry&);
 void initializeAlwaysInlinerPass(PassRegistry&);
 void initializeArgPromotionPass(PassRegistry&);
@@ -79,10 +78,10 @@ void initializeBarrierNoopPass(PassRegistry&);
 void initializeBasicAliasAnalysisPass(PassRegistry&);
 void initializeCallGraphWrapperPassPass(PassRegistry &);
 void initializeBlockExtractorPassPass(PassRegistry&);
-void initializeBlockFrequencyInfoPass(PassRegistry&);
+void initializeBlockFrequencyInfoWrapperPassPass(PassRegistry&);
 void initializeBoundsCheckingPass(PassRegistry&);
 void initializeBranchFolderPassPass(PassRegistry&);
-void initializeBranchProbabilityInfoPass(PassRegistry&);
+void initializeBranchProbabilityInfoWrapperPassPass(PassRegistry&);
 void initializeBreakCriticalEdgesPass(PassRegistry&);
 void initializeCallGraphPrinterPass(PassRegistry&);
 void initializeCallGraphViewerPass(PassRegistry&);
@@ -304,6 +303,7 @@ void initializeDwarfEHPreparePass(PassRegistry&);
 void initializeFloat2IntPass(PassRegistry&);
 void initializeLoopDistributePass(PassRegistry&);
 void initializeSjLjEHPreparePass(PassRegistry&);
+void initializeDemandedBitsPass(PassRegistry&);
 }
 
 #endif

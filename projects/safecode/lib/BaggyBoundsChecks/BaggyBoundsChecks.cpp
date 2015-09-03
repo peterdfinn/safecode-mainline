@@ -208,7 +208,7 @@ InsertBaggyBoundsChecks::adjustGlobalValue (GlobalValue * V) {
   GlobalVariable *metaData = new GlobalVariable (*(GV->getParent()),
                                                  metadataType,
                                                  GV->isConstant(),
-                                                 GlobalValue::LinkerPrivateLinkage,
+                                                 GlobalValue::PrivateLinkage,
                                                  c,
                                                  "meta." + GV->getName());
 

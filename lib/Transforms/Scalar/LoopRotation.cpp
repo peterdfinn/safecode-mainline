@@ -13,6 +13,7 @@
 
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -56,6 +57,7 @@ namespace {
 
     // LCSSA form makes instruction renaming easier.
     void getAnalysisUsage(AnalysisUsage &AU) const override {
+      AU.addPreserved<AliasAnalysis>();
       AU.addRequired<AssumptionCacheTracker>();
       AU.addPreserved<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
@@ -465,8 +467,8 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   // terminator into OrigPreHeader. Fix up the PHI nodes in each of OrigHeader's
   // successors by duplicating their incoming values for OrigHeader.
   TerminatorInst *TI = OrigHeader->getTerminator();
-  for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-    for (BasicBlock::iterator BI = TI->getSuccessor(i)->begin();
+  for (BasicBlock *SuccBB : TI->successors())
+    for (BasicBlock::iterator BI = SuccBB->begin();
          PHINode *PN = dyn_cast<PHINode>(BI); ++BI)
       PN->addIncoming(PN->getIncomingValueForBlock(OrigHeader), OrigPreheader);
 

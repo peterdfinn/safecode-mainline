@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DebugReport.h"
+#include <iostream>
 #include "safecode/Config/config.h"
 
 NAMESPACE_SC_BEGIN
@@ -28,8 +29,8 @@ DebugViolationInfo::print(std::ostream & OS) const {
   // Print the source filename and line number.
   //
   OS << "= Fault PC Source                       :\t"
-    << (this->SourceFile ? this->SourceFile : "<unknown>")
-    << ":" << std::dec << this->lineNo << "\n";
+     << (this->SourceFile ? this->SourceFile : "<unknown>")
+     << ":" << std::dec << this->lineNo << "\n";
 
   //
   // Print the pool handle.

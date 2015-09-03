@@ -839,7 +839,7 @@ LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const {
   SDValue FIN = DAG.getFrameIndex(FI, MVT::i32);
   return DAG.getLoad(
       getPointerTy(DAG.getDataLayout()), SDLoc(Op), DAG.getEntryNode(), FIN,
-      MachinePointerInfo::getFixedStack(FI), false, false, false, 0);
+      MachinePointerInfo::getFixedStack(MF, FI), false, false, false, 0);
 }
 
 SDValue XCoreTargetLowering::
@@ -1367,8 +1367,8 @@ XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
       //from this parameter
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i32);
       ArgIn = DAG.getLoad(VA.getLocVT(), dl, Chain, FIN,
-                          MachinePointerInfo::getFixedStack(FI),
-                          false, false, false, 0);
+                          MachinePointerInfo::getFixedStack(MF, FI), false,
+                          false, false, 0);
     }
     const ArgDataPair ADP = { ArgIn, Ins[i].Flags };
     ArgData.push_back(ADP);
@@ -1517,9 +1517,10 @@ XCoreTargetLowering::LowerReturn(SDValue Chain,
     // Create a SelectionDAG node corresponding to a store
     // to this memory location.
     SDValue FIN = DAG.getFrameIndex(FI, MVT::i32);
-    MemOpChains.push_back(DAG.getStore(Chain, dl, OutVals[i], FIN,
-                          MachinePointerInfo::getFixedStack(FI), false, false,
-                          0));
+    MemOpChains.push_back(DAG.getStore(
+        Chain, dl, OutVals[i], FIN,
+        MachinePointerInfo::getFixedStack(DAG.getMachineFunction(), FI), false,
+        false, 0));
   }
 
   // Transform all store nodes into one single node because
@@ -1828,9 +1829,8 @@ SDValue XCoreTargetLowering::PerformDAGCombine(SDNode *N,
     SDValue Chain = ST->getChain();
 
     unsigned StoreBits = ST->getMemoryVT().getStoreSizeInBits();
-    if (StoreBits % 8) {
-      break;
-    }
+    assert((StoreBits % 8) == 0 &&
+           "Store size in bits must be a multiple of 8");
     unsigned ABIAlignment = DAG.getDataLayout().getABITypeAlignment(
         ST->getMemoryVT().getTypeForEVT(*DCI.DAG.getContext()));
     unsigned Alignment = ST->getAlignment();

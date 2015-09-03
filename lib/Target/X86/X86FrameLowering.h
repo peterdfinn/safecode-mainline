@@ -68,8 +68,8 @@ public:
   void adjustForHiPEPrologue(MachineFunction &MF,
                              MachineBasicBlock &PrologueMBB) const override;
 
-  void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
-                                     RegScavenger *RS = nullptr) const override;
+  void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
+                            RegScavenger *RS = nullptr) const override;
 
   bool
   assignCalleeSavedSpillSlots(MachineFunction &MF,
@@ -145,6 +145,11 @@ private:
   void BuildStackAlignAND(MachineBasicBlock &MBB,
                           MachineBasicBlock::iterator MBBI, DebugLoc DL,
                           uint64_t MaxAlign) const;
+
+  /// Make small positive stack adjustments using POPs.
+  bool adjustStackWithPops(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                           int Offset) const;
 
   /// Adjusts the stack pointer using LEA, SUB, or ADD.
   MachineInstrBuilder BuildStackAdjustment(MachineBasicBlock &MBB,

@@ -23,12 +23,11 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeAliasAnalysisAnalysisGroup(Registry);
   initializeAliasAnalysisCounterPass(Registry);
   initializeAAEvalPass(Registry);
-  initializeAliasDebuggerPass(Registry);
   initializeAliasSetPrinterPass(Registry);
   initializeNoAAPass(Registry);
   initializeBasicAliasAnalysisPass(Registry);
-  initializeBlockFrequencyInfoPass(Registry);
-  initializeBranchProbabilityInfoPass(Registry);
+  initializeBlockFrequencyInfoWrapperPassPass(Registry);
+  initializeBranchProbabilityInfoWrapperPassPass(Registry);
   initializeCostModelAnalysisPass(Registry);
   initializeCFGViewerPass(Registry);
   initializeCFGPrinterPass(Registry);
@@ -37,6 +36,7 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeCFLAliasAnalysisPass(Registry);
   initializeDependenceAnalysisPass(Registry);
   initializeDelinearizationPass(Registry);
+  initializeDemandedBitsPass(Registry);
   initializeDivergenceAnalysisPass(Registry);
   initializeDominanceFrontierPass(Registry);
   initializeDomViewerPass(Registry);

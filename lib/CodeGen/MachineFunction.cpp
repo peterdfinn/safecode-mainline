@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
@@ -79,12 +80,19 @@ MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
   Alignment = STI->getTargetLowering()->getMinFunctionAlignment();
 
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on Fn.
+  // FIXME: Use Function::optForSize().
   if (!Fn->hasFnAttribute(Attribute::OptimizeForSize))
     Alignment = std::max(Alignment,
                          STI->getTargetLowering()->getPrefFunctionAlignment());
 
   FunctionNumber = FunctionNum;
   JumpTableInfo = nullptr;
+
+  assert(TM.isCompatibleDataLayout(getDataLayout()) &&
+         "Can't create a MachineFunction using a Module with a "
+         "Target-incompatible DataLayout attached\n");
+
+  PSVManager = llvm::make_unique<PseudoSourceValueManager>();
 }
 
 MachineFunction::~MachineFunction() {
@@ -320,6 +328,13 @@ MachineFunction::extractStoreMemRefs(MachineInstr::mmo_iterator Begin,
     }
   }
   return std::make_pair(Result, Result + Num);
+}
+
+const char *MachineFunction::createExternalSymbolName(StringRef Name) {
+  char *Dest = Allocator.Allocate<char>(Name.size() + 1);
+  std::copy(Name.begin(), Name.end(), Dest);
+  Dest[Name.size()] = 0;
+  return Dest;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
